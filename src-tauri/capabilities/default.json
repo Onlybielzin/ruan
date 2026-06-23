@@ -6,6 +6,12 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "fs:read-files",
+    "fs:write-files",
+    {
+      "identifier": "fs:scope",
+      "allow": ["$HOME/**"]
+    }
   ]
 }

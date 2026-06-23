@@ -3,6 +3,7 @@
 // envio (RequestData) e de resposta (ResponseData) entre front e Rust.
 
 import type { KeyValue, RequestItem, BodyMode } from "./types";
+import type { EffectiveSettings } from "./settings";
 
 /** Subset de KeyValue usado no envio/resposta (name/value/enabled). */
 export interface KeyVal {
@@ -30,6 +31,13 @@ export interface RequestData {
   body: RequestBody;
   /** Timeout em ms. Omitido => default no Rust (30s). */
   timeoutMs?: number;
+  /**
+   * Config efetiva de envio (F20): proxy/SSL/timeout/redirects/encodeUrl. Omitido
+   * => comportamento legado no Rust. Espelha `RequestData.settings` (Rust) e o
+   * EffectiveSettings de `lib/settings.ts`. O wiring (requestStore.enviar) compoe
+   * via `efetivas(appSettings, request.settings)` e injeta aqui.
+   */
+  settings?: EffectiveSettings;
 }
 
 /** Resposta estruturada devolvida pelo Rust. */

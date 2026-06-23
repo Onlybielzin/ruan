@@ -17,17 +17,33 @@ import TestsPanel from "./components/TestsPanel";
 import ScriptConsole from "./components/ScriptConsole";
 import CookiesPanel from "./components/CookiesPanel";
 import HistoryPanel from "./components/HistoryPanel";
+import CodeGenPanel from "./components/CodeGenPanel";
+import { RequestSettings } from "./components/RequestSettings";
+import { SettingsPanel } from "./components/SettingsPanel";
+import ImportExportPanel from "./components/ImportExportPanel";
+import CommandPalette from "./components/CommandPalette";
+import GlobalSearch from "./components/GlobalSearch";
 
 import { useCollectionsStore } from "./store/collectionsStore";
 import { useRequestStore } from "./store/requestStore";
 import { useTabsStore } from "./store/tabsStore";
 import { useCookiesStore, hostDeUrl } from "./store/cookiesStore";
+import { useSettingsStore } from "./store/settingsStore";
 import { useAtalhos, type HandlersAtalho } from "./lib/useAtalhos";
 import { acharRequestPorItemPath } from "./lib/treeLookup";
 import { saveRequest } from "./lib/ipc";
+import type { Comando } from "./lib/search";
 import type { RequestItem } from "./lib/types";
 
-type AbaRequest = "params" | "headers" | "body" | "auth" | "script" | "tests";
+type AbaRequest =
+  | "params"
+  | "headers"
+  | "body"
+  | "auth"
+  | "script"
+  | "tests"
+  | "settings"
+  | "code";
 
 const ABAS: { id: AbaRequest; rotulo: string }[] = [
   { id: "params", rotulo: "Params" },
@@ -36,6 +52,8 @@ const ABAS: { id: AbaRequest; rotulo: string }[] = [
   { id: "auth", rotulo: "Auth" },
   { id: "script", rotulo: "Script" },
   { id: "tests", rotulo: "Tests" },
+  { id: "settings", rotulo: "Settings" },
+  { id: "code", rotulo: "Code" },
 ];
 
 type AbaPainel = "console" | "cookies" | "history";
@@ -52,6 +70,16 @@ function App() {
   const [painel, setPainel] = useState<AbaPainel>("console");
   // Painel de variaveis/ambientes (EnvEditor) aberto sob demanda.
   const [varsAberto, setVarsAberto] = useState(false);
+  // F17 — painel de import/export aberto sob demanda (lateral, como Variaveis).
+  const [ioAberto, setIoAberto] = useState(false);
+  // F20 — painel de configuracoes globais aberto sob demanda.
+  const [settingsAberto, setSettingsAberto] = useState(false);
+  // F19 — command palette (Ctrl+K). Estado e dono dos atalhos ficam no App.
+  const [paletteAberto, setPaletteAberto] = useState(false);
+
+  // F20 — tema e fonte globais, aplicados no root (.app-shell).
+  const theme = useSettingsStore((s) => s.settings.theme);
+  const fontSize = useSettingsStore((s) => s.settings.fontSize);
   // F10 — nomes de variaveis nao resolvidas no ultimo envio (so NOMES; nunca
   // valores/secrets). Aviso NAO bloqueante.
   const avisoVars = useRequestStore((s) => s.avisoVars);
@@ -136,8 +164,85 @@ function App() {
   );
   useAtalhos(handlers);
 
+  // ---- F19: atalho global Ctrl/Cmd+K abre o command palette ----------------
+  // useAtalhos (F15) nao trata K; registramos um listener proprio aqui (App e
+  // dono dos atalhos globais). Toggla o overlay.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteAberto((v) => !v);
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // ---- F19: acoes reais do command palette --------------------------------
+  // Injetadas no CommandPalette. `run` fala diretamente com os stores; o palette
+  // fecha sozinho apos executar (onFechar no componente).
+  const comandos = useMemo<Comando[]>(
+    () => [
+      {
+        id: "nova-aba",
+        label: "Nova aba (request avulsa)",
+        keywords: ["new", "tab", "aba", "request", "criar"],
+        secao: "Abas",
+        run: () => {
+          const id = useTabsStore.getState().abrirNova();
+          idEspelhado.current = id;
+          const a = useTabsStore.getState().tabs.find((t) => t.id === id);
+          if (a) useRequestStore.getState().setRequest(a.request);
+        },
+      },
+      {
+        id: "nova-colecao",
+        label: "Nova colecao...",
+        keywords: ["new", "collection", "colecao", "criar", "abrir"],
+        secao: "Colecoes",
+        run: () => {
+          void useCollectionsStore.getState().abrirColecao();
+        },
+      },
+      {
+        id: "enviar",
+        label: "Enviar request atual",
+        keywords: ["send", "enviar", "run", "executar"],
+        secao: "Request",
+        run: () => {
+          void useRequestStore.getState().enviar();
+        },
+      },
+      {
+        id: "salvar",
+        label: "Salvar request atual",
+        keywords: ["save", "salvar"],
+        secao: "Request",
+        run: () => {
+          void salvarRequestAtiva();
+        },
+      },
+      {
+        id: "abrir-settings",
+        label: "Abrir configuracoes globais",
+        keywords: ["settings", "config", "configuracoes", "proxy", "ssl", "tema"],
+        secao: "App",
+        run: () => setSettingsAberto(true),
+      },
+      {
+        id: "abrir-import",
+        label: "Importar / Exportar colecao",
+        keywords: ["import", "export", "importar", "exportar", "postman", "curl", "openapi"],
+        secao: "App",
+        run: () => setIoAberto(true),
+      },
+    ],
+    [],
+  );
+
   return (
-    <main className="app-shell">
+    <main className="app-shell" data-theme={theme} style={{ fontSize }}>
       <header className="app-header">
         <span className="app-title">ruan</span>
         <div className="app-header-tools">
@@ -150,11 +255,30 @@ function App() {
           >
             Variaveis
           </button>
+          <button
+            type="button"
+            className="app-vars-btn"
+            aria-pressed={ioAberto}
+            onClick={() => setIoAberto((v) => !v)}
+          >
+            Importar/Exportar
+          </button>
+          <button
+            type="button"
+            className="app-vars-btn"
+            aria-pressed={settingsAberto}
+            onClick={() => setSettingsAberto((v) => !v)}
+          >
+            Settings
+          </button>
         </div>
       </header>
       <section className="app-body">
         <aside className="app-sidebar" aria-label="Colecoes">
           <CollectionToolbar />
+          <div className="app-sidebar-search">
+            <GlobalSearch />
+          </div>
           <Sidebar />
         </aside>
         <div className="app-main">
@@ -186,6 +310,8 @@ function App() {
             {aba === "auth" && <AuthTab />}
             {aba === "script" && <ScriptEditor />}
             {aba === "tests" && <TestsPanel />}
+            {aba === "settings" && <RequestSettings />}
+            {aba === "code" && <CodeGenPanel />}
           </div>
 
           {avisoVars.length > 0 && (
@@ -240,7 +366,51 @@ function App() {
             <EnvEditor />
           </aside>
         )}
+
+        {ioAberto && (
+          <aside className="app-vars-panel" aria-label="Importar e exportar">
+            <div className="app-vars-panel-head">
+              <span>Importar / Exportar</span>
+              <button
+                type="button"
+                className="app-vars-close"
+                aria-label="Fechar painel de import/export"
+                onClick={() => setIoAberto(false)}
+              >
+                x
+              </button>
+            </div>
+            <ImportExportPanel
+              onImported={(path) => {
+                useCollectionsStore.getState().setActive(path);
+              }}
+            />
+          </aside>
+        )}
+
+        {settingsAberto && (
+          <aside className="app-vars-panel" aria-label="Configuracoes globais">
+            <div className="app-vars-panel-head">
+              <span>Configuracoes</span>
+              <button
+                type="button"
+                className="app-vars-close"
+                aria-label="Fechar painel de configuracoes"
+                onClick={() => setSettingsAberto(false)}
+              >
+                x
+              </button>
+            </div>
+            <SettingsPanel />
+          </aside>
+        )}
       </section>
+
+      <CommandPalette
+        aberto={paletteAberto}
+        onFechar={() => setPaletteAberto(false)}
+        comandos={comandos}
+      />
     </main>
   );
 }

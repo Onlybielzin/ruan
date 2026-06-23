@@ -55,12 +55,44 @@ pub struct RequestData {
     #[serde(default)]
     pub body: RequestBody,
     /// Timeout em milissegundos. None => default (30s).
+    /// Compat F4. Se `settings.timeout_ms` estiver presente, ELE tem precedencia
+    /// (a F20 compoe o timeout efetivo no front e o entrega em `settings`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Config efetiva de envio (F20). None => comportamento legado (timeout do
+    /// campo acima/default, redirects ate 10, sem proxy, SSL verificado).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<RequestSettings>,
 }
 
 fn default_method() -> String {
     "GET".to_string()
+}
+
+/// Config efetiva de envio entregue pela F20 (espelha EffectiveSettings do TS).
+/// Todos os campos opcionais por retrocompat: serde `default` preenche ausentes,
+/// e o front so manda o que resolveu. A engine aplica o que estiver presente.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestSettings {
+    /// URL do proxy (http/https/socks). Ausente => sem proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    /// Verificar certificado SSL. None => default (verifica).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_verify: Option<bool>,
+    /// Timeout em ms. None => cai no timeout_ms do RequestData/default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Seguir redirects (3xx). None => default (segue, ate o limite do reqwest).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_redirects: Option<bool>,
+    /// Maximo de redirects (so vale com follow_redirects=true).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_redirects: Option<u64>,
+    /// Percent-encode automatico da URL. Reservado (a montagem ja encoda params).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encode_url: Option<bool>,
 }
 
 /// Resposta estruturada devolvida ao front.

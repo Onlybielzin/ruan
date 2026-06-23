@@ -16,6 +16,8 @@ import {
 } from "../lib/auth";
 import { useEnvStore } from "./envStore";
 import { useCollectionsStore } from "./collectionsStore";
+import { useSettingsStore } from "./settingsStore";
+import { efetivas } from "../lib/settings";
 import { runScript, montarRuan } from "../lib/scripting";
 import type { RuanApi } from "../lib/scripting";
 
@@ -146,11 +148,19 @@ export const useRequestStore = create<RequestState>((set, get) => ({
         value: q.value,
         enabled: q.enabled,
       }));
+      // F20 — compoe as settings EFETIVAS de envio: globais (settingsStore) +
+      // overrides por-request (request.settings). Per-request sobrescreve o
+      // global campo a campo (`efetivas`). O resultado vai no RequestData.settings
+      // e o Rust aplica timeout/redirects/proxy/SSL.
+      const appSettings = useSettingsStore.getState().settings;
+      const settingsEfetivas = efetivas(appSettings, get().request.settings);
+
       const reqComAuth = {
         ...req,
         // Nao sobrescreve headers/params que o usuario ja definiu na mao.
         headers: mesclarSemSobrescrever(req.headers, authHeaders, true),
         params: mesclarSemSobrescrever(req.params, authQuery, false),
+        settings: settingsEfetivas,
       };
 
       const response = await sendRequest(reqComAuth);

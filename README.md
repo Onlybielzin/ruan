@@ -9,8 +9,9 @@ banco de dados, sem nuvem obrigatória.
 > Coleção em árvore (pastas + requests com badge de método), builder com realce de variáveis
 > `{{var}}`, abas Params/Headers/Body/Auth, seletor de ambiente e viewer de resposta.
 
-> Status: **MVP funcional (Milestone 1)**. Já abre coleções, monta e dispara requests e mostra
-> a resposta. Variáveis/ambientes, auth, scripting e import/export estão no roadmap abaixo.
+> Status: **completo (F1–F20)**. Coleções, request builder, variáveis/ambientes, auth, scripting
+> pre/post, testes, cookie jar, tabs, histórico, import/export, code-gen, command palette e
+> settings — tudo implementado, com 331 testes Rust e 1538 no front (+ mutation testing).
 
 ## Por que Tauri (e não Electron)
 
@@ -56,26 +57,26 @@ banco de dados, sem nuvem obrigatória.
 - [x] **F7 — Editor de body** (none / json / text / xml / form-urlencoded / multipart / graphql, com CodeMirror e pretty-print)
 - [x] **F8 — Viewer de resposta** (status, tempo, tamanho; abas Body/Headers/Cookies; highlight; busca; preview de imagem/PDF)
 
-### Milestone 2 — Variáveis, ambientes e auth (roadmap)
+### Milestone 2 — Variáveis, ambientes e auth (pronto)
 
-- [ ] **F9 — Environments & variáveis** (por coleção/global, com variáveis secret)
-- [ ] **F10 — Interpolação `{{var}}`** (URL, headers, params, body, auth, com precedência de escopo)
-- [ ] **F11 — Autenticação** (Basic, Bearer, API Key, OAuth2; herança de pasta/coleção)
+- [x] **F9 — Environments & variáveis** (por coleção/global, com variáveis secret)
+- [x] **F10 — Interpolação `{{var}}`** (URL, headers, params, body, auth, com precedência de escopo)
+- [x] **F11 — Autenticação** (Basic, Bearer, API Key, OAuth2; herança de pasta/coleção)
 
-### Milestone 3 — Scripting, testes e produtividade (roadmap)
+### Milestone 3 — Scripting, testes e produtividade (pronto)
 
-- [ ] **F12 — Scripts pre-request e post-response** (JS sandbox; `bru.setVar/getVar`, acesso a `req`/`res`)
-- [ ] **F13 — Testes / assertions** (painel pass/fail por request)
-- [ ] **F14 — Cookie jar** (Set-Cookie por domínio, reenvio automático)
-- [ ] **F15 — Tabs / multi-request** (abas com indicador de não-salvo, atalhos)
-- [ ] **F16 — Histórico de execuções** (lista cronológica com replay)
+- [x] **F12 — Scripts pre-request e post-response** (JS sandbox; API `ruan.setVar/getVar/setEnvVar/getEnvVar`, acesso a `req`/`res`)
+- [x] **F13 — Testes / assertions** (painel pass/fail por request)
+- [x] **F14 — Cookie jar** (Set-Cookie por domínio, reenvio automático)
+- [x] **F15 — Tabs / multi-request** (abas com indicador de não-salvo, atalhos)
+- [x] **F16 — Histórico de execuções** (lista cronológica com replay)
 
-### Milestone 4 — Interoperabilidade e extras (roadmap)
+### Milestone 4 — Interoperabilidade e extras (pronto)
 
-- [ ] **F17 — Import / Export** (Postman, OpenAPI, cURL)
-- [ ] **F18 — Code generation** (cURL, fetch, axios, Python requests)
-- [ ] **F19 — Busca global & command palette** (Ctrl+K)
-- [ ] **F20 — Settings** (proxy, SSL verify, timeout, tema; overrides por request)
+- [x] **F17 — Import / Export** (Postman, OpenAPI, cURL)
+- [x] **F18 — Code generation** (cURL, fetch, axios, Python requests)
+- [x] **F19 — Busca global & command palette** (Ctrl+K)
+- [x] **F20 — Settings** (proxy, SSL verify, timeout, tema; overrides por request)
 
 ## Rodando
 

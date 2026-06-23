@@ -2,6 +2,8 @@
 // Mantenha sincronizado: serde usa camelCase no disco e no IPC, entao os campos
 // aqui batem 1:1 com as structs Rust.
 
+import type { RequestSettings } from "./settings";
+
 /** Par chave/valor (headers, params, form data). */
 export interface KeyValue {
   name: string;
@@ -81,6 +83,12 @@ export interface RequestItem {
   tests: string;
   /** Documentacao em markdown. */
   docs: string;
+  /**
+   * Overrides de envio por-request (F20): encodeUrl/followRedirects/maxRedirects/
+   * timeoutMs. Opcional/retrocompativel — ausente => herda tudo do global. O
+   * wiring compoe `efetivas(appSettings, settings)` no envio.
+   */
+  settings?: RequestSettings;
 }
 
 /** Pasta da colecao (diretorio com folder.yml). */
@@ -159,6 +167,9 @@ export function normalizarRequest(
     scripts: { pre: r.scripts?.pre ?? "", post: r.scripts?.post ?? "" },
     tests: r.tests ?? "",
     docs: r.docs ?? "",
+    // F20: passa adiante quando presente (campo opcional, retrocompat). Mantido
+    // como undefined quando ausente para nao poluir o RequestItem com {}.
+    ...(r.settings !== undefined ? { settings: r.settings } : {}),
   };
 }
 

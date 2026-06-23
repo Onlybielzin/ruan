@@ -10,9 +10,12 @@ use std::time::{Duration, Instant};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::cookie::Jar;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
-use reqwest::{Client, Method, Url};
+use reqwest::redirect::Policy;
+use reqwest::{Client, Method, Proxy, Url};
 
-use crate::http::types::{HttpError, KeyVal, RequestBody, RequestData, ResponseData};
+use crate::http::types::{
+    HttpError, KeyVal, RequestBody, RequestData, RequestSettings, ResponseData,
+};
 
 // Conjunto de caracteres a NAO escapar em application/x-www-form-urlencoded.
 // Espaco vira '+' (tratado a parte). Mantemos os "safe" do formato: -_.*
@@ -40,6 +43,51 @@ pub fn form_encode(s: &str) -> String {
 
 /// Timeout padrao quando o RequestData nao especifica um.
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// Resolve o timeout efetivo em ms a partir do RequestData (F20). Precedencia:
+///   settings.timeout_ms  >  timeout_ms (campo legado)  >  DEFAULT_TIMEOUT_MS.
+/// LOGICA PURA.
+pub fn resolver_timeout_ms(req: &RequestData) -> u64 {
+    req.settings
+        .as_ref()
+        .and_then(|s| s.timeout_ms)
+        .or(req.timeout_ms)
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+}
+
+/// Resolve a politica de redirect (F20) a partir das settings opcionais. LOGICA
+/// PURA (so monta a Policy do reqwest, sem I/O).
+///   None / follow_redirects ausente => default (segue, ate 10 — comportamento legado).
+///   follow_redirects = false         => Policy::none() (nao segue 3xx).
+///   follow_redirects = true          => limited(max_redirects) ou default se ausente.
+pub fn resolver_redirect_policy(settings: Option<&RequestSettings>) -> Policy {
+    match settings.and_then(|s| s.follow_redirects) {
+        Some(false) => Policy::none(),
+        Some(true) => match settings.and_then(|s| s.max_redirects) {
+            Some(n) => Policy::limited(n as usize),
+            None => Policy::default(),
+        },
+        None => Policy::default(),
+    }
+}
+
+/// True se a engine deve aceitar certificados invalidos (SSL verify OFF). LOGICA
+/// PURA. So quando `ssl_verify == Some(false)`; ausente/Some(true) => verifica.
+pub fn aceitar_cert_invalido(settings: Option<&RequestSettings>) -> bool {
+    matches!(settings.and_then(|s| s.ssl_verify), Some(false))
+}
+
+/// Extrai a URL de proxy utilizavel das settings (trim, ignora vazio). LOGICA
+/// PURA. None => sem proxy.
+pub fn proxy_url(settings: Option<&RequestSettings>) -> Option<String> {
+    let raw = settings.and_then(|s| s.proxy.as_deref())?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
 
 /// Monta a URL final aplicando os query params habilitados por cima da URL base.
 /// LOGICA PURA: nao toca a rede. Preserva params que ja venham na URL string e
@@ -218,11 +266,23 @@ pub async fn send_com_jar(
         }
     }
 
-    let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
+    // F20: timeout/redirect/proxy/SSL efetivos vem de req.settings (composto no
+    // front). Sem settings => comportamento legado (default).
+    let settings = req.settings.as_ref();
+    let timeout = Duration::from_millis(resolver_timeout_ms(&req));
 
     let mut builder = Client::builder()
-        // follow-redirects on por padrao no reqwest (Policy::default = ate 10).
-        .timeout(timeout);
+        .timeout(timeout)
+        .redirect(resolver_redirect_policy(settings));
+    // SSL verify OFF: aceita certificados invalidos (so quando explicitado).
+    if aceitar_cert_invalido(settings) {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    // Proxy (F20): aplica quando ha URL utilizavel; URL invalida vira Build error.
+    if let Some(p) = proxy_url(settings) {
+        let proxy = Proxy::all(&p).map_err(|e| HttpError::Build(e.to_string()))?;
+        builder = builder.proxy(proxy);
+    }
     // F14: cookie store compartilhado quando o jar esta presente (toggle ON).
     if let Some(jar) = jar {
         builder = builder.cookie_provider(jar);
@@ -939,5 +999,239 @@ mod tests {
         // JSON sem `enabled`: default_true() deve preencher true.
         let kv: KeyVal = serde_json::from_str(r#"{"name":"a","value":"1"}"#).unwrap();
         assert!(kv.enabled);
+    }
+
+    // ---- F20: resolver_timeout_ms ---------------------------------------
+
+    fn req_base() -> RequestData {
+        RequestData {
+            method: "GET".to_string(),
+            url: "https://x.test/".to_string(),
+            headers: vec![],
+            params: vec![],
+            body: RequestBody::default(),
+            timeout_ms: None,
+            settings: None,
+        }
+    }
+
+    fn settings_vazio() -> RequestSettings {
+        RequestSettings::default()
+    }
+
+    #[test]
+    fn timeout_sem_nada_usa_default() {
+        assert_eq!(resolver_timeout_ms(&req_base()), DEFAULT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn timeout_campo_legado_quando_sem_settings() {
+        let mut r = req_base();
+        r.timeout_ms = Some(1234);
+        assert_eq!(resolver_timeout_ms(&r), 1234);
+    }
+
+    #[test]
+    fn timeout_settings_tem_precedencia_sobre_legado() {
+        let mut r = req_base();
+        r.timeout_ms = Some(1234);
+        r.settings = Some(RequestSettings {
+            timeout_ms: Some(5000),
+            ..settings_vazio()
+        });
+        assert_eq!(resolver_timeout_ms(&r), 5000);
+    }
+
+    #[test]
+    fn timeout_settings_sem_timeout_cai_no_legado() {
+        let mut r = req_base();
+        r.timeout_ms = Some(777);
+        r.settings = Some(settings_vazio());
+        assert_eq!(resolver_timeout_ms(&r), 777);
+    }
+
+    #[test]
+    fn timeout_settings_sem_timeout_e_sem_legado_usa_default() {
+        let mut r = req_base();
+        r.settings = Some(settings_vazio());
+        assert_eq!(resolver_timeout_ms(&r), DEFAULT_TIMEOUT_MS);
+    }
+
+    // ---- F20: resolver_redirect_policy ----------------------------------
+    // Policy nao expoe introspeccao publica; comparamos via Debug string que e
+    // estavel o suficiente para distinguir none/limited/default.
+
+    fn policy_dbg(p: Policy) -> String {
+        format!("{p:?}")
+    }
+
+    #[test]
+    fn redirect_sem_settings_e_default() {
+        assert_eq!(
+            policy_dbg(resolver_redirect_policy(None)),
+            policy_dbg(Policy::default())
+        );
+    }
+
+    #[test]
+    fn redirect_follow_ausente_e_default() {
+        let s = settings_vazio();
+        assert_eq!(
+            policy_dbg(resolver_redirect_policy(Some(&s))),
+            policy_dbg(Policy::default())
+        );
+    }
+
+    #[test]
+    fn redirect_follow_false_e_none() {
+        let s = RequestSettings {
+            follow_redirects: Some(false),
+            ..settings_vazio()
+        };
+        assert_eq!(
+            policy_dbg(resolver_redirect_policy(Some(&s))),
+            policy_dbg(Policy::none())
+        );
+    }
+
+    #[test]
+    fn redirect_follow_true_sem_max_e_default() {
+        let s = RequestSettings {
+            follow_redirects: Some(true),
+            ..settings_vazio()
+        };
+        assert_eq!(
+            policy_dbg(resolver_redirect_policy(Some(&s))),
+            policy_dbg(Policy::default())
+        );
+    }
+
+    #[test]
+    fn redirect_follow_true_com_max_e_limited() {
+        let s = RequestSettings {
+            follow_redirects: Some(true),
+            max_redirects: Some(3),
+            ..settings_vazio()
+        };
+        assert_eq!(
+            policy_dbg(resolver_redirect_policy(Some(&s))),
+            policy_dbg(Policy::limited(3))
+        );
+    }
+
+    #[test]
+    fn redirect_max_ignorado_quando_follow_false() {
+        // max_redirects nao deve transformar a policy em limited se follow=false.
+        let s = RequestSettings {
+            follow_redirects: Some(false),
+            max_redirects: Some(9),
+            ..settings_vazio()
+        };
+        assert_eq!(
+            policy_dbg(resolver_redirect_policy(Some(&s))),
+            policy_dbg(Policy::none())
+        );
+    }
+
+    // ---- F20: aceitar_cert_invalido -------------------------------------
+
+    #[test]
+    fn cert_sem_settings_verifica() {
+        assert!(!aceitar_cert_invalido(None));
+    }
+
+    #[test]
+    fn cert_ssl_verify_ausente_verifica() {
+        let s = settings_vazio();
+        assert!(!aceitar_cert_invalido(Some(&s)));
+    }
+
+    #[test]
+    fn cert_ssl_verify_true_verifica() {
+        let s = RequestSettings {
+            ssl_verify: Some(true),
+            ..settings_vazio()
+        };
+        assert!(!aceitar_cert_invalido(Some(&s)));
+    }
+
+    #[test]
+    fn cert_ssl_verify_false_aceita_invalido() {
+        let s = RequestSettings {
+            ssl_verify: Some(false),
+            ..settings_vazio()
+        };
+        assert!(aceitar_cert_invalido(Some(&s)));
+    }
+
+    // ---- F20: proxy_url -------------------------------------------------
+
+    #[test]
+    fn proxy_sem_settings_none() {
+        assert_eq!(proxy_url(None), None);
+    }
+
+    #[test]
+    fn proxy_ausente_none() {
+        let s = settings_vazio();
+        assert_eq!(proxy_url(Some(&s)), None);
+    }
+
+    #[test]
+    fn proxy_vazio_none() {
+        let s = RequestSettings {
+            proxy: Some("".to_string()),
+            ..settings_vazio()
+        };
+        assert_eq!(proxy_url(Some(&s)), None);
+    }
+
+    #[test]
+    fn proxy_so_espacos_none() {
+        let s = RequestSettings {
+            proxy: Some("   ".to_string()),
+            ..settings_vazio()
+        };
+        assert_eq!(proxy_url(Some(&s)), None);
+    }
+
+    #[test]
+    fn proxy_valido_trim() {
+        let s = RequestSettings {
+            proxy: Some("  http://127.0.0.1:8080  ".to_string()),
+            ..settings_vazio()
+        };
+        assert_eq!(proxy_url(Some(&s)), Some("http://127.0.0.1:8080".to_string()));
+    }
+
+    // ---- F20: serde retrocompat do RequestData --------------------------
+
+    #[test]
+    fn requestdata_sem_settings_desserializa() {
+        // JSON legado (sem `settings`): default => None, sem quebrar.
+        let req: RequestData = serde_json::from_str(r#"{"url":"https://x.test/"}"#).unwrap();
+        assert!(req.settings.is_none());
+    }
+
+    #[test]
+    fn requestdata_com_settings_desserializa_camelcase() {
+        let json = r#"{"url":"https://x.test/","settings":{"sslVerify":false,"timeoutMs":1000,"followRedirects":false,"maxRedirects":2,"proxy":"http://p:1","encodeUrl":true}}"#;
+        let req: RequestData = serde_json::from_str(json).unwrap();
+        let s = req.settings.unwrap();
+        assert_eq!(s.ssl_verify, Some(false));
+        assert_eq!(s.timeout_ms, Some(1000));
+        assert_eq!(s.follow_redirects, Some(false));
+        assert_eq!(s.max_redirects, Some(2));
+        assert_eq!(s.proxy.as_deref(), Some("http://p:1"));
+        assert_eq!(s.encode_url, Some(true));
+    }
+
+    #[test]
+    fn requestsettings_parcial_desserializa() {
+        // So um campo presente: o resto cai em None (todos opcionais).
+        let s: RequestSettings = serde_json::from_str(r#"{"timeoutMs":500}"#).unwrap();
+        assert_eq!(s.timeout_ms, Some(500));
+        assert!(s.ssl_verify.is_none());
+        assert!(s.follow_redirects.is_none());
     }
 }

@@ -12,6 +12,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // F17 — import/export le e grava arquivos escolhidos no dialog.
+        .plugin(tauri_plugin_fs::init())
         // Estado: watchers de filesystem por colecao (F1).
         .manage(CollectionWatchers::new())
         // Estado: cookie jar compartilhado entre requests (F14). Default ON.
