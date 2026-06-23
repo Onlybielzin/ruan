@@ -6,6 +6,9 @@ pub mod http;
 // Servidor MCP (integracao com IAs): logica pura de dispatch das tools `ruan_*`.
 // O transporte STDIO/JSON-RPC fica no binario `src/bin/ruan-mcp.rs`.
 pub mod mcp;
+// Painel de autoconfiguracao do MCP: resolve o binario `ruan-mcp` e registra o
+// servidor nos clientes de IA (Claude Code via CLI, Claude Desktop via config).
+pub mod mcp_setup;
 pub mod store;
 
 use store::watcher::CollectionWatchers;
@@ -56,6 +59,11 @@ pub fn run() {
             // F16 — historico de execucoes (persistencia)
             app_state::history::load_history_cmd,
             app_state::history::save_history_cmd,
+            // MCP — autoconfiguracao do servidor `ruan-mcp` nos clientes de IA
+            mcp_setup::mcp_binary_path,
+            mcp_setup::mcp_setup_status,
+            mcp_setup::mcp_register_claude_code,
+            mcp_setup::mcp_register_claude_desktop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

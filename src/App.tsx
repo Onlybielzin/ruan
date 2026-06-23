@@ -21,6 +21,7 @@ import CodeGenPanel from "./components/CodeGenPanel";
 import { RequestSettings } from "./components/RequestSettings";
 import { SettingsPanel } from "./components/SettingsPanel";
 import ImportExportPanel from "./components/ImportExportPanel";
+import McpPanel from "./components/McpPanel";
 import CommandPalette from "./components/CommandPalette";
 import GlobalSearch from "./components/GlobalSearch";
 
@@ -74,6 +75,8 @@ function App() {
   const [ioAberto, setIoAberto] = useState(false);
   // F20 — painel de configuracoes globais aberto sob demanda.
   const [settingsAberto, setSettingsAberto] = useState(false);
+  // MCP — painel de autoconfiguracao do servidor MCP (conectar IA) sob demanda.
+  const [mcpAberto, setMcpAberto] = useState(false);
   // F19 — command palette (Ctrl+K). Estado e dono dos atalhos ficam no App.
   const [paletteAberto, setPaletteAberto] = useState(false);
 
@@ -271,6 +274,14 @@ function App() {
           >
             Settings
           </button>
+          <button
+            type="button"
+            className="app-vars-btn"
+            aria-pressed={mcpAberto}
+            onClick={() => setMcpAberto((v) => !v)}
+          >
+            IA / MCP
+          </button>
         </div>
       </header>
       <section className="app-body">
@@ -402,6 +413,23 @@ function App() {
               </button>
             </div>
             <SettingsPanel />
+          </aside>
+        )}
+
+        {mcpAberto && (
+          <aside className="app-vars-panel" aria-label="Conectar IA e MCP">
+            <div className="app-vars-panel-head">
+              <span>IA / MCP</span>
+              <button
+                type="button"
+                className="app-vars-close"
+                aria-label="Fechar painel de IA/MCP"
+                onClick={() => setMcpAberto(false)}
+              >
+                x
+              </button>
+            </div>
+            <McpPanel />
           </aside>
         )}
       </section>
