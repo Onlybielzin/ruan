@@ -14,6 +14,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Estado: watchers de filesystem por colecao (F1).
         .manage(CollectionWatchers::new())
+        // Estado: cookie jar compartilhado entre requests (F14). Default ON.
+        .manage(http::cookies::CookieJarState::new())
         .invoke_handler(tauri::generate_handler![
             // F1 — store basico
             store::commands::open_collection,
@@ -41,6 +43,14 @@ pub fn run() {
             app_state::globals::save_global_vars_cmd,
             // F11 — OAuth2 (obtencao de token; demais auth e aplicada no front)
             http::oauth::oauth2_token,
+            // F14 — cookie jar (listar/limpar/toggle)
+            http::cookies::list_cookies,
+            http::cookies::clear_cookies,
+            http::cookies::set_cookies_enabled,
+            http::cookies::cookies_enabled,
+            // F16 — historico de execucoes (persistencia)
+            app_state::history::load_history_cmd,
+            app_state::history::save_history_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

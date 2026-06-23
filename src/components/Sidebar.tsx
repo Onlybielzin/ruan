@@ -18,6 +18,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCollectionsStore } from "../store/collectionsStore";
 import { slugFront } from "../store/collectionsStore";
 import { useRequestStore } from "../store/requestStore";
+import { useTabsStore } from "../store/tabsStore";
+import { itemPathDe } from "../lib/treeLookup";
 import type { Collection, TreeItem } from "../lib/types";
 import { isFolder, isRequest } from "../lib/types";
 import {
@@ -520,7 +522,11 @@ function ItemNode(props: NodeProps) {
           if (isFolder(item)) {
             setAberto((v) => !v);
           } else if (isRequest(item)) {
-            // Carrega a request selecionada no builder (F4).
+            // F15: abre (ou foca) uma aba para a request selecionada. A aba
+            // ativa e espelhada no builder pela costura do App.tsx; aqui so
+            // garantimos que o builder reflita a selecao imediatamente tambem.
+            const itemPath = itemPathDe(dir, item.name);
+            useTabsStore.getState().abrirRequest(collectionPath, itemPath, item);
             useRequestStore.getState().setRequest(item);
           }
         }}

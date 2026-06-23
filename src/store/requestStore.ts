@@ -16,6 +16,8 @@ import {
 } from "../lib/auth";
 import { useEnvStore } from "./envStore";
 import { useCollectionsStore } from "./collectionsStore";
+import { runScript, montarRuan } from "../lib/scripting";
+import type { RuanApi } from "../lib/scripting";
 
 interface RequestState {
   /** Request atualmente em edicao no builder. */
@@ -32,6 +34,16 @@ interface RequestState {
    * bloqueante. Vazio = tudo resolvido.
    */
   avisoVars: string[];
+  /**
+   * Logs capturados (console.*) dos scripts pre/post do ultimo envio, na ordem
+   * de execucao (pre primeiro, depois post). A UI mostra no ScriptConsole.
+   */
+  scriptLogs: string[];
+  /**
+   * Mensagem de erro do ultimo script que lancou (pre ou post), ou null se
+   * ambos rodaram ok / nao havia script. NAO bloqueia o envio.
+   */
+  scriptErro: string | null;
 
   /**
    * Aplica um patch parcial na request atual. Generico de proposito: qualquer
@@ -52,6 +64,8 @@ export const useRequestStore = create<RequestState>((set, get) => ({
   loading: false,
   error: null,
   avisoVars: [],
+  scriptLogs: [],
+  scriptErro: null,
 
   atualizarRequest: (patch) => {
     set((state) => ({ request: { ...state.request, ...patch } }));
@@ -66,21 +80,42 @@ export const useRequestStore = create<RequestState>((set, get) => ({
       response: null,
       error: null,
       avisoVars: [],
+      scriptLogs: [],
+      scriptErro: null,
     });
   },
 
   enviar: async () => {
     // Evita envios concorrentes do mesmo store.
     if (get().loading) return;
-    set({ loading: true, error: null });
+    set({ loading: true, error: null, scriptLogs: [], scriptErro: null });
+    // Buffer acumulado de logs/erro dos scripts (pre + post). Guardado no estado
+    // ao final (e tambem no catch, para nao perder logs do pre se o envio falhar).
+    const scriptLogs: string[] = [];
+    let scriptErro: string | null = null;
     try {
-      // Monta os escopos da colecao ativa e interpola `{{var}}` ANTES do envio.
-      // O Rust so executa HTTP; a resolucao de variaveis e do front (decisao M2).
       const collectionsState = useCollectionsStore.getState();
       const activePath = collectionsState.activePath;
+
+      // Objeto `ruan` ligado ao envStore da colecao ativa. Sem colecao ativa,
+      // setVar/setEnvVar viram no-op (e getVar/getEnvVar retornam undefined).
+      const ruan = montarRuanParaColecao(activePath);
+
+      // (1) PRE-script: roda ANTES da interpolacao com `req` MUTAVEL. O usuario
+      // pode mutar method/url/headers/params/body e setar vars (que afetam a
+      // interpolacao subsequente, pois rodamos scopesDe DEPOIS do pre).
+      const reqMutavel = requestDataDeItem(get().request);
+      const pre = runScript(get().request.scripts.pre, {
+        ruan,
+        req: reqMutavel,
+      });
+      for (const l of pre.logs) scriptLogs.push(l);
+      if (pre.erro) scriptErro = `pre: ${pre.erro}`;
+
+      // (2) Monta os escopos JA com as vars que o pre-script setou e interpola
+      // `{{var}}`. O Rust so executa HTTP; a resolucao e do front (decisao M2).
       const scopes = useEnvStore.getState().scopesDe(activePath);
-      const bruta = requestDataDeItem(get().request);
-      const { req, faltando } = interpolarRequest(bruta, scopes);
+      const { req, faltando } = interpolarRequest(reqMutavel, scopes);
       // `faltando` NAO bloqueia o envio: guarda apenas NOMES para aviso na UI.
 
       // F11 — resolve a auth EFETIVA (heranca request -> pasta -> colecao) e
@@ -119,13 +154,77 @@ export const useRequestStore = create<RequestState>((set, get) => ({
       };
 
       const response = await sendRequest(reqComAuth);
-      set({ response, loading: false, error: null, avisoVars: faltando });
+
+      // (5) POST-script: acesso a `res` (ResponseData) e pode setar vars (ex:
+      // extrair um token do corpo). `req` continua disponivel (ja interpolado).
+      const post = runScript(get().request.scripts.post, {
+        ruan,
+        req,
+        res: response,
+      });
+      for (const l of post.logs) scriptLogs.push(l);
+      if (post.erro) {
+        scriptErro = scriptErro
+          ? `${scriptErro}; post: ${post.erro}`
+          : `post: ${post.erro}`;
+      }
+
+      set({
+        response,
+        loading: false,
+        error: null,
+        avisoVars: faltando,
+        scriptLogs,
+        scriptErro,
+      });
     } catch (e) {
-      set({ loading: false, error: mensagemDeErro(e) });
+      // Mantem os logs/erro do pre-script mesmo se o envio HTTP falhar.
+      set({
+        loading: false,
+        error: mensagemDeErro(e),
+        scriptLogs,
+        scriptErro,
+      });
     }
   },
 
   limparResposta: () => {
-    set({ response: null, error: null, avisoVars: [] });
+    set({
+      response: null,
+      error: null,
+      avisoVars: [],
+      scriptLogs: [],
+      scriptErro: null,
+    });
   },
 }));
+
+/**
+ * Liga o objeto `ruan` exposto aos scripts ao envStore da colecao ativa.
+ *   getVar/setVar      -> runtime vars (sessao)
+ *   getEnvVar/setEnvVar -> environment ativo (persiste no disco)
+ * Sem colecao ativa (`path === null`), leituras retornam undefined e escritas
+ * sao no-op (nao ha onde guardar).
+ */
+function montarRuanParaColecao(path: string | null): RuanApi {
+  if (path === null) {
+    return {
+      getVar: () => undefined,
+      setVar: () => {},
+      getEnvVar: () => undefined,
+      setEnvVar: () => {},
+    };
+  }
+  const env = useEnvStore.getState();
+  return montarRuan({
+    getVar: (nome) => env.getRuntimeVar(path, nome),
+    setVar: (nome, valor) => env.setRuntimeVar(path, nome, valor),
+    getEnvVar: (nome) => env.getEnvVarAtiva(path, nome),
+    // setEnvVar e async (persiste no disco); o script nao aguarda — disparamos
+    // e seguimos (a persistencia roda em background, o estado em memoria ja
+    // reflete via salvarEnvironment).
+    setEnvVar: (nome, valor) => {
+      void env.setEnvVarAtiva(path, nome, valor);
+    },
+  });
+}

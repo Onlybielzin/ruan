@@ -11,6 +11,7 @@
 // partir do RequestItem. Isso desacopla a engine do schema de persistencia.
 
 pub mod commands;
+pub mod cookies;
 pub mod engine;
 pub mod oauth;
 pub mod types;

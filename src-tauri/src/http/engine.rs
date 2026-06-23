@@ -4,9 +4,11 @@
 // Logica PURA testavel (montagem de URL com params, content-type default por
 // modo de body) vive em funcoes livres aqui; o disparo async fica em `send`.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use reqwest::cookie::Jar;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, Method, Url};
 
@@ -187,7 +189,21 @@ fn montar_corpo(body: &RequestBody) -> CorpoMontado {
 
 /// Dispara a request e devolve a resposta estruturada. ASYNC, faz I/O de rede.
 /// Nunca paniqueia: erros de rede/timeout/URL viram HttpError.
+///
+/// Compat F4: assinatura original (sem cookie jar). Delega para `send_com_jar`
+/// com `None` — cada envio cria um Client sem cookie store compartilhado.
 pub async fn send(req: RequestData) -> Result<ResponseData, HttpError> {
+    send_com_jar(req, None).await
+}
+
+/// Igual a `send`, mas opcionalmente injeta um cookie jar compartilhado (F14).
+/// Quando `jar` e `Some`, o Client reusa esse store: Set-Cookie das respostas
+/// passa a ser reenviado nas proximas requests do mesmo dominio. `None` mantem
+/// o comportamento sem sessao (compat F4). ASYNC, faz I/O de rede; sem panic.
+pub async fn send_com_jar(
+    req: RequestData,
+    jar: Option<Arc<Jar>>,
+) -> Result<ResponseData, HttpError> {
     let method = resolver_method(&req.method)?;
     let url = montar_url(&req.url, &req.params)?;
     let mut headers = montar_headers(&req.headers)?;
@@ -204,9 +220,14 @@ pub async fn send(req: RequestData) -> Result<ResponseData, HttpError> {
 
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS));
 
-    let client = Client::builder()
+    let mut builder = Client::builder()
         // follow-redirects on por padrao no reqwest (Policy::default = ate 10).
-        .timeout(timeout)
+        .timeout(timeout);
+    // F14: cookie store compartilhado quando o jar esta presente (toggle ON).
+    if let Some(jar) = jar {
+        builder = builder.cookie_provider(jar);
+    }
+    let client = builder
         .build()
         .map_err(|e| HttpError::Build(e.to_string()))?;
 

@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::store::error::StoreError;
 
 pub mod globals;
+pub mod history;
 
 const APP_DIR: &str = "ruan";
 const STATE_FILE: &str = "state.json";

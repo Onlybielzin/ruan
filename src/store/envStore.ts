@@ -23,7 +23,8 @@ import type {
   VarScopes,
   EstadoColecaoEnv,
 } from "../lib/envScopes";
-import { construirScopes } from "../lib/envScopes";
+import { construirScopes, acharEnvAtivo, buscarVar } from "../lib/envScopes";
+import { upsertVar } from "../lib/scripting";
 
 // ---- Wrappers IPC (cada um e um #[tauri::command] registrado na Integracao) ----
 
@@ -101,6 +102,18 @@ interface EnvStoreState {
   setGlobalVars: (path: string, vars: Variable[]) => Promise<void>;
   /** Define as variaveis de runtime (M3 — scripts). */
   setRuntimeVars: (path: string, vars: Record<string, string>) => void;
+  /** Le uma runtime var da colecao (undefined se ausente). M3 — scripts. */
+  getRuntimeVar: (path: string, nome: string) => string | undefined;
+  /** Seta UMA runtime var (escopo runtime do VarScopes). M3 — scripts. */
+  setRuntimeVar: (path: string, nome: string, valor: string) => void;
+  /** Le uma variavel do environment ativo da colecao (undefined se ausente). */
+  getEnvVarAtiva: (path: string, nome: string) => string | undefined;
+  /**
+   * Seta UMA variavel no environment ativo e PERSISTE no disco. No-op se nao ha
+   * environment ativo. Cria a variavel (enabled, nao-secret) se nao existir.
+   * M3 — scripts (ruan.setEnvVar).
+   */
+  setEnvVarAtiva: (path: string, nome: string, valor: string) => Promise<void>;
   /** Monta o VarScopes da colecao (delega a `construirScopes`, puro). */
   scopesDe: (path: string | null) => VarScopes;
 }
@@ -258,6 +271,51 @@ export const useEnvStore = create<EnvStoreState>((set, get) => ({
         },
       };
     });
+  },
+
+  getRuntimeVar: (path, nome) => {
+    const atual = get().porColecao[path];
+    if (!atual) return undefined;
+    return Object.prototype.hasOwnProperty.call(atual.runtimeVars, nome)
+      ? atual.runtimeVars[nome]
+      : undefined;
+  },
+
+  setRuntimeVar: (path, nome, valor) => {
+    set((s) => {
+      const atual = s.porColecao[path] ?? estadoColecaoVazio();
+      return {
+        porColecao: {
+          ...s.porColecao,
+          [path]: {
+            ...atual,
+            runtimeVars: { ...atual.runtimeVars, [nome]: valor },
+          },
+        },
+      };
+    });
+  },
+
+  getEnvVarAtiva: (path, nome) => {
+    const atual = get().porColecao[path];
+    if (!atual) return undefined;
+    const envAtivo = acharEnvAtivo(atual.environments, atual.activeEnvName);
+    if (!envAtivo) return undefined;
+    return buscarVar(envAtivo.variables, nome);
+  },
+
+  setEnvVarAtiva: async (path, nome, valor) => {
+    const atual = get().porColecao[path];
+    const envAtivo = atual
+      ? acharEnvAtivo(atual.environments, atual.activeEnvName)
+      : undefined;
+    // Sem environment ativo nao ha onde persistir: no-op silencioso (o script
+    // pode usar runtime vars nesse caso).
+    if (!envAtivo) return;
+    const variables = upsertVar(envAtivo.variables, nome, valor);
+    const atualizado: Environment = { ...envAtivo, variables };
+    // Reusa salvarEnvironment: persiste no disco e atualiza o estado em memoria.
+    await get().salvarEnvironment(path, atualizado);
   },
 
   scopesDe: (path) => {
